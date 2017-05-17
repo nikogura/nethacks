@@ -14,6 +14,8 @@ MAC_LOOPBACK="lo0"
 
 MACNAT="rdr pass on lo0 inet proto tcp from any to $METADATA_IP port = $METADATA_PORT -> $LOCALHOST port $LOCALPORT"
 MACRULE="pass out route-to ($MAC_LOOPBACK $LOCALHOST) inet proto tcp from any to $METADATA_IP"
+MACIFACEUP="sudo ifconfig lo0 alias $METADATA_IP"
+MACIFACEDOWN="sudo ifconfig lo0 -alias $METADATA_IP"
 LINUXRULE="OUTPUT -d $METADATA_IP/32 -p tcp -m tcp --dport $METADATA_PORT -j REDIRECT --to-ports $LOCALPORT"
 
 STARTMSG="Starting redirect magic."
@@ -25,6 +27,8 @@ OPERATION=$1
 
 startMac() {
     echo $STARTMSG
+
+    $MACIFACEUP
 
     PFUP=$(cat <<EOF
 $MACNAT
@@ -39,6 +43,7 @@ EOF
 
 stopMac() {
     echo $STOPMSG
+    $MACIFACEDOWN
     sudo 2>/dev/null pfctl -F all -f /etc/pf.conf && 2>/dev/null sudo pfctl -d
     statusMac
 }
@@ -47,7 +52,7 @@ statusMac() {
     NAT=$(2>/dev/null sudo pfctl -s nat)
     RULE=$(2>/dev/null sudo pfctl -s rules)
 
-    if [[ $NAT =~ "$MACNAT" && $RULE =~ "$MACRULE" ]]; then
+    if [[ $NAT =~ "$MACNAT" && $RULE =~ "$MACRULE" && $(ifconfig $MAC_LOOPBACK) > 0 ]]; then
         echo $UPMSG
     else
         echo $DOWNMSG
