@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+# Networking magic that bends outbound requests to 169.254.169.254:80
+# to a local service thus making a local service behave as if it was running in AWS.
+# Works on Linux and MacOS
+
+OSINFO=$(uname)
+PROGRAM="muahaha"
+METADATA_IP="169.254.169.254"
+METADATA_PORT="80"
+LOCALHOST="127.0.0.1"
+LOCALPORT="9999"
+MAC_LOOPBACK="lo0"
+
+MACNAT="rdr pass on lo0 inet proto tcp from any to $METADATA_IP port = $METADATA_PORT -> $LOCALHOST port $LOCALPORT"
+MACRULE="pass out route-to ($MAC_LOOPBACK $LOCALHOST) inet proto tcp from any to $METADATA_IP"
+LINUXRULE="OUTPUT -d $METADATA_IP/32 -p tcp -m tcp --dport $METADATA_PORT -j REDIRECT --to-ports $LOCALPORT"
+
+STARTMSG="Starting redirect magic."
+STOPMSG="Stopping redirect magic."
+UPMSG="Redirect magic is up."
+DOWNMSG="Redirect magic is down."
+
+OPERATION=$1
+
+startMac() {
+    echo $STARTMSG
+
+    PFUP=$(cat <<EOF
+$MACNAT
+$MACRULE
+EOF
+)
+    echo "$PFUP" | 2>/dev/null sudo pfctl -ef -
+
+    statusMac
+
+}
+
+stopMac() {
+    echo $STOPMSG
+    sudo 2>/dev/null pfctl -F all -f /etc/pf.conf && 2>/dev/null sudo pfctl -d
+    statusMac
+}
+
+statusMac() {
+    NAT=$(2>/dev/null sudo pfctl -s nat)
+    RULE=$(2>/dev/null sudo pfctl -s rules)
+
+    if [[ $NAT =~ "$MACNAT" && $RULE =~ "$MACRULE" ]]; then
+        echo $UPMSG
+    else
+        echo $DOWNMSG
+    fi
+
+}
+
+startLinux() {
+    echo $STARTMSG
+    sudo iptables -t nat -A $LINUXRULE
+}
+
+stopLinux() {
+    sudo iptables -t nat -D $LINUXRULE
+}
+
+statusLinux() {
+    STATUS=$(sudo iptables -S -t nat | grep -e '-A OUTPUT')
+    if [[ $STATUS =~ "$LINUXRULE" ]]; then
+        echo $UPMSG
+    else
+        echo $DOWNMSG
+    fi
+}
+
+case "$1" in
+    start)
+        if [ "$OSINFO" == 'Darwin' ]; then
+            startMac
+        else
+            startLinux
+        fi
+        RETVAL=$?
+        ;;
+    stop)
+        if [ "$OSINFO" == 'Darwin' ]; then
+            stopMac
+        else
+            stopLinux
+        fi
+        RETVAL=$?
+        ;;
+    restart)
+        if [ "$OSINFO" == 'Darwin' ]; then
+            stopMac
+            startMac
+        else
+            stopLinux
+            startLinux
+        fi
+        ;;
+    status)
+        if [ "$OSINFO" == 'Darwin' ]; then
+            statusMac
+        else
+            statusLinux
+        fi
+        ;;
+    *)
+        echo $"Usage: ${PROGRAM} {start|stop|restart|status}"
+        RETVAL=2
+        ;;
+esac
+
+exit $RETVAL
